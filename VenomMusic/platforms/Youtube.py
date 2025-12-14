@@ -1,26 +1,31 @@
 import asyncio
 import os
 import re
-from typing import Union
 import yt_dlp
+import aiohttp
+
+from typing import Union
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
 from py_yt import VideosSearch
+
 from VenomMusic.utils.formatters import time_to_seconds
-import aiohttp
 from VenomMusic import LOGGER
-from typing import Union
 
 YOUR_API_URL = None
 FALLBACK_API_URL = "https://shrutibots.site"
 
+
 async def load_api_url():
     global YOUR_API_URL
     logger = LOGGER("VenomMusic.platforms.Youtube.py")
-    
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get("https://pastebin.com/raw/rLsBhAQa", timeout=aiohttp.ClientTimeout(total=10)) as response:
+            async with session.get(
+                "https://pastebin.com/raw/rLsBhAQa",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
                 if response.status == 200:
                     content = await response.text()
                     YOUR_API_URL = content.strip()
@@ -32,6 +37,7 @@ async def load_api_url():
         YOUR_API_URL = FALLBACK_API_URL
         logger.info("Using fallback API URL")
 
+
 try:
     loop = asyncio.get_event_loop()
     if loop.is_running():
@@ -41,6 +47,149 @@ try:
 except RuntimeError:
     pass
 
+
+async def download_song(link: str) -> Union[str, None]:
+    global YOUR_API_URL
+
+    if not YOUR_API_URL:
+        await load_api_url()
+        YOUR_API_URL = YOUR_API_URL or FALLBACK_API_URL
+
+    video_id = link.split("v=")[-1].split("&")[0] if "v=" in link else link
+    if not video_id or len(video_id) < 3:
+        return None
+
+    os.makedirs("downloads", exist_ok=True)
+    file_path = f"downloads/{video_id}.mp3"
+
+    if os.path.exists(file_path):
+        return file_path
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{YOUR_API_URL}/download",
+                params={"url": video_id, "type": "audio"},
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as response:
+                if response.status != 200:
+                    return None
+
+                data = await response.json()
+                token = data.get("download_token")
+                if not token:
+                    return None
+
+                async with session.get(
+                    f"{YOUR_API_URL}/stream/{video_id}?type=audio",
+                    headers={"X-Download-Token": token},
+                    timeout=aiohttp.ClientTimeout(total=300),
+                ) as file_response:
+                    if file_response.status != 200:
+                        return None
+
+                    with open(file_path, "wb") as f:
+                        async for chunk in file_response.content.iter_chunked(16384):
+                            f.write(chunk)
+        return file_path
+    except Exception:
+        return None
+
+
+async def download_video(link: str) -> Union[str, None]:
+    global YOUR_API_URL
+
+    if not YOUR_API_URL:
+        await load_api_url()
+        YOUR_API_URL = YOUR_API_URL or FALLBACK_API_URL
+
+    video_id = link.split("v=")[-1].split("&")[0] if "v=" in link else link
+    if not video_id or len(video_id) < 3:
+        return None
+
+    os.makedirs("downloads", exist_ok=True)
+    file_path = f"downloads/{video_id}.mp4"
+
+    if os.path.exists(file_path):
+        return file_path
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{YOUR_API_URL}/download",
+                params={"url": video_id, "type": "video"},
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as response:
+                if response.status != 200:
+                    return None
+
+                data = await response.json()
+                token = data.get("download_token")
+                if not token:
+                    return None
+
+                async with session.get(
+                    f"{YOUR_API_URL}/stream/{video_id}?type=video",
+                    headers={"X-Download-Token": token},
+                    timeout=aiohttp.ClientTimeout(total=600),
+                ) as file_response:
+                    if file_response.status != 200:
+                        return None
+
+                    with open(file_path, "wb") as f:
+                        async for chunk in file_response.content.iter_chunked(16384):
+                            f.write(chunk)
+        return file_path
+    except Exception:
+        return None
+
+
+async def shell_cmd(cmd: str) -> str:
+    proc = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    return (out or err).decode("utf-8")
+
+
+class YouTubeAPI:
+    def __init__(self):
+        self.base = "https://www.youtube.com/watch?v="
+        self.listbase = "https://youtube.com/playlist?list="
+        self.regex = r"(?:youtube\.com|youtu\.be)"
+
+    async def exists(self, link: str, videoid: Union[bool, str] = None):
+        return bool(re.search(self.regex, self.base + link if videoid else link))
+
+    async def download(
+        self,
+        link: str,
+        mystic,
+        video: Union[bool, str] = None,
+        videoid: Union[bool, str] = None,
+        **kwargs,
+    ):
+        if videoid:
+            link = self.base + link
+
+        try:
+            if video:
+                file = await download_video(link)
+            else:
+                file = await download_song(link)
+
+            return (file, True) if file else (None, False)
+        except Exception:
+            return None, False
+    if loop.is_running():
+        asyncio.create_task(load_api_url())
+    else:
+        loop.run_until_complete(load_api_url())
+except RuntimeError:
+    pass
+
 async def download_song(link: str) -> str:
     global YOUR_API_URL
     
@@ -993,5 +1142,6 @@ class YouTubeAPI:
                 return None, False
         except Exception:
             return None, False
+
 
 
