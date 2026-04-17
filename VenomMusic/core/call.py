@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Union
 
 from pyrogram import Client
-from pyrogram.types import InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardMarkup, Message
 from pytgcalls import PyTgCalls, StreamType
 from pytgcalls.exceptions import (
     AlreadyJoinedError,
@@ -46,6 +46,54 @@ async def _clear_(chat_id):
     db[chat_id] = []
     await remove_active_video_chat(chat_id)
     await remove_active_chat(chat_id)
+
+
+async def delete_playing_message(chat_id: int):
+    """Delete the old playing message when song ends"""
+    try:
+        # Get current song data
+        current_song = db.get(chat_id, [])
+        if current_song and len(current_song) > 0:
+            mystic = current_song[0].get("mystic")
+            if mystic and isinstance(mystic, Message):
+                try:
+                    await mystic.delete()
+                except:
+                    pass
+    except:
+        pass
+
+
+async def send_song_ended_message(chat_id: int):
+    """Send a message indicating the song has ended"""
+    try:
+        language = await get_lang(chat_id)
+        _ = get_string(language)
+        
+        # Get the original chat ID from the queue
+        current_song = db.get(chat_id, [])
+        if current_song and len(current_song) > 0:
+            original_chat_id = current_song[0].get("chat_id", chat_id)
+        else:
+            original_chat_id = chat_id
+        
+        # Send song ended message
+        ended_msg = await app.send_message(
+            chat_id=original_chat_id,
+            text=_["song_ended"].format(
+                "🎵",
+                "✅"
+            ) if "song_ended" in _ else "🎵 **Song Ended!**\n\nThe current song has finished playing.\n✅ Queue is now empty."
+        )
+        
+        # Auto-delete the message after 5 seconds
+        await asyncio.sleep(5)
+        try:
+            await ended_msg.delete()
+        except:
+            pass
+    except Exception as e:
+        LOGGER(__name__).error(f"Error sending song ended message: {e}")
 
 
 class Call(PyTgCalls):
@@ -112,12 +160,22 @@ class Call(PyTgCalls):
     async def stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
         try:
+            # Delete the playing message and send ended notification
+            await delete_playing_message(chat_id)
+            await send_song_ended_message(chat_id)
             await _clear_(chat_id)
             await assistant.leave_group_call(chat_id)
         except:
             pass
 
     async def stop_stream_force(self, chat_id: int):
+        try:
+            # Delete the playing message and send ended notification
+            await delete_playing_message(chat_id)
+            await send_song_ended_message(chat_id)
+        except:
+            pass
+        
         try:
             if config.STRING1:
                 await self.one.leave_group_call(chat_id)
@@ -220,6 +278,9 @@ class Call(PyTgCalls):
     async def force_stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
         try:
+            # Delete the playing message and send ended notification
+            await delete_playing_message(chat_id)
+            await send_song_ended_message(chat_id)
             check = db.get(chat_id)
             check.pop(0)
         except:
@@ -239,6 +300,9 @@ class Call(PyTgCalls):
         image: Union[bool, str] = None,
     ):
         assistant = await group_assistant(self, chat_id)
+        # Delete old playing message when skipping
+        await delete_playing_message(chat_id)
+        
         if video:
             stream = AudioVideoPiped(
                 link,
@@ -336,16 +400,21 @@ class Call(PyTgCalls):
         try:
             if loop == 0:
                 popped = check.pop(0)
+                # Delete the old playing message when moving to next song
+                await delete_playing_message(chat_id)
             else:
                 loop = loop - 1
                 await set_loop(chat_id, loop)
             await auto_clean(popped)
             if not check:
                 await _clear_(chat_id)
+                # Send song ended message when queue is empty
+                await send_song_ended_message(chat_id)
                 return await client.leave_group_call(chat_id)
         except:
             try:
                 await _clear_(chat_id)
+                await send_song_ended_message(chat_id)
                 return await client.leave_group_call(chat_id)
             except:
                 return
@@ -568,8 +637,7 @@ class Call(PyTgCalls):
         if config.STRING5:
             await self.five.start()
 
-       async def decorators(self):
-
+    async def decorators(self):
         @self.one.on_kicked()
         @self.two.on_kicked()
         @self.three.on_kicked()
@@ -586,6 +654,8 @@ class Call(PyTgCalls):
         @self.four.on_left()
         @self.five.on_left()
         async def stream_services_handler(_, chat_id: int):
+            await delete_playing_message(chat_id)
+            await send_song_ended_message(chat_id)
             await self.stop_stream(chat_id)
 
         @self.one.on_stream_end()
@@ -594,36 +664,9 @@ class Call(PyTgCalls):
         @self.four.on_stream_end()
         @self.five.on_stream_end()
         async def stream_end_handler1(client, update: Update):
-
             if not isinstance(update, StreamAudioEnded):
                 return
+            await self.change_stream(client, update.chat_id)
 
-            chat_id = update.chat_id
-
-            # 🧹 Delete old playing message
-            try:
-                if db.get(chat_id) and len(db[chat_id]) > 0:
-                    old_msg = db[chat_id][0].get("mystic")
-                    if old_msg:
-                        try:
-                            await old_msg.delete()
-                        except:
-                            pass
-            except:
-                pass
-
-            # 💖 Cute message
-            try:
-                msg = await app.send_message(
-                    chat_id,
-                    "🥺 **Song ended...**\n👉 **Please play a new song babe 💕**"
-                )
-                await asyncio.sleep(5)
-                await msg.delete()
-            except:
-                pass
-
-            # ▶️ Play next song
-            await self.change_stream(client, chat_id)
 
 Venom = Call()
