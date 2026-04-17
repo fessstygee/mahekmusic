@@ -568,7 +568,8 @@ class Call(PyTgCalls):
         if config.STRING5:
             await self.five.start()
 
-       async def decorators(self):
+    async def decorators(self):
+
         @self.one.on_kicked()
         @self.two.on_kicked()
         @self.three.on_kicked()
@@ -587,7 +588,6 @@ class Call(PyTgCalls):
         async def stream_services_handler(_, chat_id: int):
             await self.stop_stream(chat_id)
 
-        # 🔥 UPDATED STREAM END HANDLER
         @self.one.on_stream_end()
         @self.two.on_stream_end()
         @self.three.on_stream_end()
@@ -599,7 +599,7 @@ class Call(PyTgCalls):
 
             chat_id = update.chat_id
 
-            # 🔥 1. DELETE OLD PLAYER MESSAGE
+            # DELETE OLD MESSAGE
             try:
                 if db.get(chat_id) and len(db[chat_id]) > 0:
                     old_msg = db[chat_id][0].get("mystic")
@@ -611,24 +611,18 @@ class Call(PyTgCalls):
             except:
                 pass
 
-            # 🔥 2. SEND SONG END MESSAGE
+            # CUTE MESSAGE 😄
             try:
                 msg = await app.send_message(
                     chat_id,
-                   "🎧 **This song is over!**\n😋 **Let's play another one babe 💖**"
+                    "🥺 **Song ended...**\n👉 **Please play a new song babe 💕**"
                 )
-
-                # Auto delete after 5 sec
                 await asyncio.sleep(5)
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                await msg.delete()
             except:
                 pass
 
-            # 🔥 3. PLAY NEXT SONG
+            # NEXT SONG
             await self.change_stream(client, chat_id)
 
-
-Venom = Call()
+      
