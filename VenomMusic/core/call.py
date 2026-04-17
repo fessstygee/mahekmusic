@@ -41,6 +41,9 @@ from strings import get_string
 autoend = {}
 counter = {}
 
+# Dictionary to store all bot messages per chat
+bot_messages = {}
+
 
 async def _clear_(chat_id):
     db[chat_id] = []
@@ -48,52 +51,99 @@ async def _clear_(chat_id):
     await remove_active_chat(chat_id)
 
 
-async def delete_playing_message(chat_id: int):
-    """Delete the old playing message when song ends"""
+async def delete_all_previous_messages(chat_id: int):
+    """Delete ALL previous bot messages in the chat (including old song messages)"""
     try:
-        # Get current song data
+        if chat_id in bot_messages:
+            # Delete all stored message IDs
+            for msg_id in bot_messages[chat_id]:
+                try:
+                    await app.delete_messages(chat_id, msg_id)
+                except Exception as e:
+                    pass
+            # Clear the list
+            bot_messages[chat_id] = []
+    except Exception as e:
+        LOGGER(__name__).error(f"Error deleting messages in {chat_id}: {e}")
+
+
+async def delete_current_playing_message(chat_id: int):
+    """Delete the current playing message"""
+    try:
         current_song = db.get(chat_id, [])
         if current_song and len(current_song) > 0:
             mystic = current_song[0].get("mystic")
-            if mystic and isinstance(mystic, Message):
+            if mystic:
                 try:
+                    # Delete the message
                     await mystic.delete()
                 except:
                     pass
+                # Remove from stored messages
+                if chat_id in bot_messages and mystic.id in bot_messages[chat_id]:
+                    bot_messages[chat_id].remove(mystic.id)
     except:
         pass
 
 
-async def send_song_ended_message(chat_id: int):
-    """Send a message indicating the song has ended"""
+async def store_message(chat_id: int, message_id: int):
+    """Store message ID to delete later"""
+    try:
+        if chat_id not in bot_messages:
+            bot_messages[chat_id] = []
+        bot_messages[chat_id].append(message_id)
+        
+        # Keep only last 20 messages to prevent memory issues
+        if len(bot_messages[chat_id]) > 20:
+            bot_messages[chat_id] = bot_messages[chat_id][-20:]
+    except:
+        pass
+
+
+async def send_clean_now_playing(chat_id: int, title: str, duration: str, user: str, videoid: str, streamtype: str, original_chat_id: int):
+    """Send a clean now playing message after deleting all old ones"""
     try:
         language = await get_lang(chat_id)
         _ = get_string(language)
         
-        # Get the original chat ID from the queue
-        current_song = db.get(chat_id, [])
-        if current_song and len(current_song) > 0:
-            original_chat_id = current_song[0].get("chat_id", chat_id)
-        else:
-            original_chat_id = chat_id
+        # IMPORTANT: Delete ALL previous bot messages first
+        await delete_all_previous_messages(chat_id)
         
-        # Send song ended message
-        ended_msg = await app.send_message(
+        # Also delete the old playing message reference
+        await delete_current_playing_message(chat_id)
+        
+        # Generate thumbnail
+        img = await gen_thumb(videoid)
+        
+        # Create markup buttons
+        button = stream_markup(_, chat_id)
+        
+        # Create caption based on stream type
+        if streamtype == "video":
+            caption = _["stream_1"].format(
+                f"https://t.me/{app.username}?start=info_{videoid}",
+                title[:23],
+                duration,
+                user,
+            )
+        else:
+            caption = f"🎵 **Now Playing:**\n📌 **Title:** {title[:50]}\n⏱️ **Duration:** {duration}\n👤 **Requested by:** {user}"
+        
+        # Send new message
+        run = await app.send_photo(
             chat_id=original_chat_id,
-            text=_["song_ended"].format(
-                "🎵",
-                "✅"
-            ) if "song_ended" in _ else "🎵 **Song Ended!**\n\nThe current song has finished playing.\n✅ Queue is now empty."
+            photo=img,
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(button),
         )
         
-        # Auto-delete the message after 5 seconds
-        await asyncio.sleep(5)
-        try:
-            await ended_msg.delete()
-        except:
-            pass
+        # Store this new message ID
+        await store_message(original_chat_id, run.id)
+        
+        return run
     except Exception as e:
-        LOGGER(__name__).error(f"Error sending song ended message: {e}")
+        LOGGER(__name__).error(f"Error sending now playing: {e}")
+        return None
 
 
 class Call(PyTgCalls):
@@ -160,9 +210,9 @@ class Call(PyTgCalls):
     async def stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
         try:
-            # Delete the playing message and send ended notification
-            await delete_playing_message(chat_id)
-            await send_song_ended_message(chat_id)
+            # Delete ALL messages when stopping
+            await delete_all_previous_messages(chat_id)
+            await delete_current_playing_message(chat_id)
             await _clear_(chat_id)
             await assistant.leave_group_call(chat_id)
         except:
@@ -170,9 +220,9 @@ class Call(PyTgCalls):
 
     async def stop_stream_force(self, chat_id: int):
         try:
-            # Delete the playing message and send ended notification
-            await delete_playing_message(chat_id)
-            await send_song_ended_message(chat_id)
+            # Force delete ALL messages
+            await delete_all_previous_messages(chat_id)
+            await delete_current_playing_message(chat_id)
         except:
             pass
         
@@ -278,11 +328,12 @@ class Call(PyTgCalls):
     async def force_stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
         try:
-            # Delete the playing message and send ended notification
-            await delete_playing_message(chat_id)
-            await send_song_ended_message(chat_id)
+            # Delete ALL messages on force stop
+            await delete_all_previous_messages(chat_id)
+            await delete_current_playing_message(chat_id)
             check = db.get(chat_id)
-            check.pop(0)
+            if check:
+                check.pop(0)
         except:
             pass
         await remove_active_video_chat(chat_id)
@@ -301,7 +352,7 @@ class Call(PyTgCalls):
     ):
         assistant = await group_assistant(self, chat_id)
         # Delete old playing message when skipping
-        await delete_playing_message(chat_id)
+        await delete_current_playing_message(chat_id)
         
         if video:
             stream = AudioVideoPiped(
@@ -400,21 +451,21 @@ class Call(PyTgCalls):
         try:
             if loop == 0:
                 popped = check.pop(0)
-                # Delete the old playing message when moving to next song
-                await delete_playing_message(chat_id)
+                # Delete old playing message when moving to next song
+                await delete_current_playing_message(chat_id)
             else:
                 loop = loop - 1
                 await set_loop(chat_id, loop)
             await auto_clean(popped)
             if not check:
+                # Delete ALL messages when queue becomes empty
+                await delete_all_previous_messages(chat_id)
                 await _clear_(chat_id)
-                # Send song ended message when queue is empty
-                await send_song_ended_message(chat_id)
                 return await client.leave_group_call(chat_id)
         except:
             try:
+                await delete_all_previous_messages(chat_id)
                 await _clear_(chat_id)
-                await send_song_ended_message(chat_id)
                 return await client.leave_group_call(chat_id)
             except:
                 return
@@ -435,6 +486,8 @@ class Call(PyTgCalls):
                 db[chat_id][0]["speed_path"] = None
                 db[chat_id][0]["speed"] = 1.0
             video = True if str(streamtype) == "video" else False
+            
+            # Send clean now playing message (this will delete all old messages)
             if "live_" in queued:
                 n, link = await YouTube.video(videoid, True)
                 if n == 0:
@@ -460,21 +513,14 @@ class Call(PyTgCalls):
                         original_chat_id,
                         text=_["call_6"],
                     )
-                img = await gen_thumb(videoid)
-                button = stream_markup(_, chat_id)
-                run = await app.send_photo(
-                    chat_id=original_chat_id,
-                    photo=img,
-                    caption=_["stream_1"].format(
-                        f"https://t.me/{app.username}?start=info_{videoid}",
-                        title[:23],
-                        check[0]["dur"],
-                        user,
-                    ),
-                    reply_markup=InlineKeyboardMarkup(button),
+                
+                # Send clean message
+                run = await send_clean_now_playing(
+                    chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
                 )
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "tg"
+                
             elif "vid_" in queued:
                 mystic = await app.send_message(original_chat_id, _["call_7"])
                 try:
@@ -506,22 +552,15 @@ class Call(PyTgCalls):
                         original_chat_id,
                         text=_["call_6"],
                     )
-                img = await gen_thumb(videoid)
-                button = stream_markup(_, chat_id)
                 await mystic.delete()
-                run = await app.send_photo(
-                    chat_id=original_chat_id,
-                    photo=img,
-                    caption=_["stream_1"].format(
-                        f"https://t.me/{app.username}?start=info_{videoid}",
-                        title[:23],
-                        check[0]["dur"],
-                        user,
-                    ),
-                    reply_markup=InlineKeyboardMarkup(button),
+                
+                # Send clean message
+                run = await send_clean_now_playing(
+                    chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
                 )
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "stream"
+                
             elif "index_" in queued:
                 stream = (
                     AudioVideoPiped(
@@ -539,15 +578,14 @@ class Call(PyTgCalls):
                         original_chat_id,
                         text=_["call_6"],
                     )
-                button = stream_markup(_, chat_id)
-                run = await app.send_photo(
-                    chat_id=original_chat_id,
-                    photo=config.STREAM_IMG_URL,
-                    caption=_["stream_2"].format(user),
-                    reply_markup=InlineKeyboardMarkup(button),
+                
+                # Send clean message
+                run = await send_clean_now_playing(
+                    chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
                 )
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "tg"
+                
             else:
                 if video:
                     stream = AudioVideoPiped(
@@ -567,48 +605,13 @@ class Call(PyTgCalls):
                         original_chat_id,
                         text=_["call_6"],
                     )
-                if videoid == "telegram":
-                    button = stream_markup(_, chat_id)
-                    run = await app.send_photo(
-                        chat_id=original_chat_id,
-                        photo=config.TELEGRAM_AUDIO_URL
-                        if str(streamtype) == "audio"
-                        else config.TELEGRAM_VIDEO_URL,
-                        caption=_["stream_1"].format(
-                            config.SUPPORT_GROUP, title[:23], check[0]["dur"], user
-                        ),
-                        reply_markup=InlineKeyboardMarkup(button),
-                    )
-                    db[chat_id][0]["mystic"] = run
-                    db[chat_id][0]["markup"] = "tg"
-                elif videoid == "soundcloud":
-                    button = stream_markup(_, chat_id)
-                    run = await app.send_photo(
-                        chat_id=original_chat_id,
-                        photo=config.SOUNCLOUD_IMG_URL,
-                        caption=_["stream_1"].format(
-                            config.SUPPORT_GROUP, title[:23], check[0]["dur"], user
-                        ),
-                        reply_markup=InlineKeyboardMarkup(button),
-                    )
-                    db[chat_id][0]["mystic"] = run
-                    db[chat_id][0]["markup"] = "tg"
-                else:
-                    img = await gen_thumb(videoid)
-                    button = stream_markup(_, chat_id)
-                    run = await app.send_photo(
-                        chat_id=original_chat_id,
-                        photo=img,
-                        caption=_["stream_1"].format(
-                            f"https://t.me/{app.username}?start=info_{videoid}",
-                            title[:23],
-                            check[0]["dur"],
-                            user,
-                        ),
-                        reply_markup=InlineKeyboardMarkup(button),
-                    )
-                    db[chat_id][0]["mystic"] = run
-                    db[chat_id][0]["markup"] = "stream"
+                
+                # Send clean message
+                run = await send_clean_now_playing(
+                    chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
+                )
+                db[chat_id][0]["mystic"] = run
+                db[chat_id][0]["markup"] = "tg"
 
     async def ping(self):
         pings = []
@@ -654,8 +657,9 @@ class Call(PyTgCalls):
         @self.four.on_left()
         @self.five.on_left()
         async def stream_services_handler(_, chat_id: int):
-            await delete_playing_message(chat_id)
-            await send_song_ended_message(chat_id)
+            # Delete all messages when bot is kicked or leaves
+            await delete_all_previous_messages(chat_id)
+            await delete_current_playing_message(chat_id)
             await self.stop_stream(chat_id)
 
         @self.one.on_stream_end()
