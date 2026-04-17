@@ -41,8 +41,9 @@ from strings import get_string
 autoend = {}
 counter = {}
 
-# Dictionary to store all bot messages per chat
-bot_messages = {}
+# Store message IDs
+current_message_id = {}
+song_ended_message_id = {}
 
 
 async def _clear_(chat_id):
@@ -51,74 +52,84 @@ async def _clear_(chat_id):
     await remove_active_chat(chat_id)
 
 
-async def delete_all_previous_messages(chat_id: int):
-    """Delete ALL previous bot messages in the chat (including old song messages)"""
+async def delete_current_message(chat_id: int):
+    """Delete current playing message"""
     try:
-        if chat_id in bot_messages:
-            # Delete all stored message IDs
-            for msg_id in bot_messages[chat_id]:
-                try:
-                    await app.delete_messages(chat_id, msg_id)
-                except Exception as e:
-                    pass
-            # Clear the list
-            bot_messages[chat_id] = []
-    except Exception as e:
-        LOGGER(__name__).error(f"Error deleting messages in {chat_id}: {e}")
-
-
-async def delete_current_playing_message(chat_id: int):
-    """Delete the current playing message"""
-    try:
-        current_song = db.get(chat_id, [])
-        if current_song and len(current_song) > 0:
-            mystic = current_song[0].get("mystic")
-            if mystic:
-                try:
-                    # Delete the message
-                    await mystic.delete()
-                except:
-                    pass
-                # Remove from stored messages
-                if chat_id in bot_messages and mystic.id in bot_messages[chat_id]:
-                    bot_messages[chat_id].remove(mystic.id)
+        if chat_id in current_message_id and current_message_id[chat_id]:
+            try:
+                await app.delete_messages(chat_id, current_message_id[chat_id])
+                LOGGER(__name__).info(f"Deleted playing message {current_message_id[chat_id]} in {chat_id}")
+            except:
+                pass
+            current_message_id[chat_id] = None
     except:
         pass
 
 
-async def store_message(chat_id: int, message_id: int):
-    """Store message ID to delete later"""
+async def delete_song_ended_message(chat_id: int):
+    """Delete song ended message if exists"""
     try:
-        if chat_id not in bot_messages:
-            bot_messages[chat_id] = []
-        bot_messages[chat_id].append(message_id)
-        
-        # Keep only last 20 messages to prevent memory issues
-        if len(bot_messages[chat_id]) > 20:
-            bot_messages[chat_id] = bot_messages[chat_id][-20:]
+        if chat_id in song_ended_message_id and song_ended_message_id[chat_id]:
+            try:
+                await app.delete_messages(chat_id, song_ended_message_id[chat_id])
+                LOGGER(__name__).info(f"Deleted song ended message {song_ended_message_id[chat_id]} in {chat_id}")
+            except:
+                pass
+            song_ended_message_id[chat_id] = None
     except:
         pass
 
 
-async def send_clean_now_playing(chat_id: int, title: str, duration: str, user: str, videoid: str, streamtype: str, original_chat_id: int):
-    """Send a clean now playing message after deleting all old ones"""
+async def send_song_ended_message(chat_id: int):
+    """Send message when song ends"""
     try:
         language = await get_lang(chat_id)
         _ = get_string(language)
         
-        # IMPORTANT: Delete ALL previous bot messages first
-        await delete_all_previous_messages(chat_id)
+        # Delete previous song ended message if exists
+        await delete_song_ended_message(chat_id)
         
-        # Also delete the old playing message reference
-        await delete_current_playing_message(chat_id)
+        # Send new song ended message
+        msg = await app.send_message(
+            chat_id=chat_id,
+            text="🎵 **Your Cute Song Ended!**\n\n✨ Please play a new song to continue the vibes!\n\n💝 Use: `/play <song name>`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎶 Play New Song", switch_inline_query_current_chat="")],
+                [InlineKeyboardButton("📋 Queue", callback_data="queue")]
+            ])
+        )
+        
+        # Store message ID
+        song_ended_message_id[chat_id] = msg.id
+        LOGGER(__name__).info(f"Song ended message sent in {chat_id}")
+        
+        # Auto delete after 30 seconds (optional)
+        # await asyncio.sleep(30)
+        # await delete_song_ended_message(chat_id)
+        
+    except Exception as e:
+        LOGGER(__name__).error(f"Error sending song ended message: {e}")
+
+
+async def send_now_playing(chat_id: int, title: str, duration: str, user: str, videoid: str, streamtype: str, original_chat_id: int):
+    """Send new now playing message"""
+    try:
+        language = await get_lang(chat_id)
+        _ = get_string(language)
+        
+        # Delete old playing message
+        await delete_current_message(original_chat_id)
+        
+        # Delete song ended message if exists
+        await delete_song_ended_message(original_chat_id)
         
         # Generate thumbnail
         img = await gen_thumb(videoid)
         
-        # Create markup buttons
+        # Create buttons
         button = stream_markup(_, chat_id)
         
-        # Create caption based on stream type
+        # Create caption
         if streamtype == "video":
             caption = _["stream_1"].format(
                 f"https://t.me/{app.username}?start=info_{videoid}",
@@ -127,7 +138,7 @@ async def send_clean_now_playing(chat_id: int, title: str, duration: str, user: 
                 user,
             )
         else:
-            caption = f"🎵 **Now Playing:**\n📌 **Title:** {title[:50]}\n⏱️ **Duration:** {duration}\n👤 **Requested by:** {user}"
+            caption = f"🎵 **Now Playing:**\n📌 **{title[:50]}**\n⏱️ **Duration:** {duration}\n👤 **Requested by:** {user}"
         
         # Send new message
         run = await app.send_photo(
@@ -137,8 +148,12 @@ async def send_clean_now_playing(chat_id: int, title: str, duration: str, user: 
             reply_markup=InlineKeyboardMarkup(button),
         )
         
-        # Store this new message ID
-        await store_message(original_chat_id, run.id)
+        # Store new message ID
+        current_message_id[original_chat_id] = run.id
+        
+        # Update database
+        if chat_id in db and db[chat_id]:
+            db[chat_id][0]["mystic"] = run
         
         return run
     except Exception as e:
@@ -210,9 +225,9 @@ class Call(PyTgCalls):
     async def stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
         try:
-            # Delete ALL messages when stopping
-            await delete_all_previous_messages(chat_id)
-            await delete_current_playing_message(chat_id)
+            # Delete all messages
+            await delete_current_message(chat_id)
+            await delete_song_ended_message(chat_id)
             await _clear_(chat_id)
             await assistant.leave_group_call(chat_id)
         except:
@@ -220,9 +235,8 @@ class Call(PyTgCalls):
 
     async def stop_stream_force(self, chat_id: int):
         try:
-            # Force delete ALL messages
-            await delete_all_previous_messages(chat_id)
-            await delete_current_playing_message(chat_id)
+            await delete_current_message(chat_id)
+            await delete_song_ended_message(chat_id)
         except:
             pass
         
@@ -328,9 +342,8 @@ class Call(PyTgCalls):
     async def force_stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
         try:
-            # Delete ALL messages on force stop
-            await delete_all_previous_messages(chat_id)
-            await delete_current_playing_message(chat_id)
+            await delete_current_message(chat_id)
+            await delete_song_ended_message(chat_id)
             check = db.get(chat_id)
             if check:
                 check.pop(0)
@@ -351,8 +364,8 @@ class Call(PyTgCalls):
         image: Union[bool, str] = None,
     ):
         assistant = await group_assistant(self, chat_id)
-        # Delete old playing message when skipping
-        await delete_current_playing_message(chat_id)
+        await delete_current_message(chat_id)
+        await delete_song_ended_message(chat_id)
         
         if video:
             stream = AudioVideoPiped(
@@ -451,20 +464,22 @@ class Call(PyTgCalls):
         try:
             if loop == 0:
                 popped = check.pop(0)
-                # Delete old playing message when moving to next song
-                await delete_current_playing_message(chat_id)
+                # Delete old playing message
+                await delete_current_message(chat_id)
             else:
                 loop = loop - 1
                 await set_loop(chat_id, loop)
             await auto_clean(popped)
             if not check:
-                # Delete ALL messages when queue becomes empty
-                await delete_all_previous_messages(chat_id)
+                # No more songs in queue - send song ended message
+                await delete_current_message(chat_id)
+                await send_song_ended_message(chat_id)
                 await _clear_(chat_id)
                 return await client.leave_group_call(chat_id)
         except:
             try:
-                await delete_all_previous_messages(chat_id)
+                await delete_current_message(chat_id)
+                await send_song_ended_message(chat_id)
                 await _clear_(chat_id)
                 return await client.leave_group_call(chat_id)
             except:
@@ -487,7 +502,6 @@ class Call(PyTgCalls):
                 db[chat_id][0]["speed"] = 1.0
             video = True if str(streamtype) == "video" else False
             
-            # Send clean now playing message (this will delete all old messages)
             if "live_" in queued:
                 n, link = await YouTube.video(videoid, True)
                 if n == 0:
@@ -514,8 +528,7 @@ class Call(PyTgCalls):
                         text=_["call_6"],
                     )
                 
-                # Send clean message
-                run = await send_clean_now_playing(
+                run = await send_now_playing(
                     chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
                 )
                 db[chat_id][0]["mystic"] = run
@@ -554,8 +567,7 @@ class Call(PyTgCalls):
                     )
                 await mystic.delete()
                 
-                # Send clean message
-                run = await send_clean_now_playing(
+                run = await send_now_playing(
                     chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
                 )
                 db[chat_id][0]["mystic"] = run
@@ -579,8 +591,7 @@ class Call(PyTgCalls):
                         text=_["call_6"],
                     )
                 
-                # Send clean message
-                run = await send_clean_now_playing(
+                run = await send_now_playing(
                     chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
                 )
                 db[chat_id][0]["mystic"] = run
@@ -606,8 +617,7 @@ class Call(PyTgCalls):
                         text=_["call_6"],
                     )
                 
-                # Send clean message
-                run = await send_clean_now_playing(
+                run = await send_now_playing(
                     chat_id, title, check[0]["dur"], user, videoid, streamtype, original_chat_id
                 )
                 db[chat_id][0]["mystic"] = run
@@ -657,9 +667,8 @@ class Call(PyTgCalls):
         @self.four.on_left()
         @self.five.on_left()
         async def stream_services_handler(_, chat_id: int):
-            # Delete all messages when bot is kicked or leaves
-            await delete_all_previous_messages(chat_id)
-            await delete_current_playing_message(chat_id)
+            await delete_current_message(chat_id)
+            await delete_song_ended_message(chat_id)
             await self.stop_stream(chat_id)
 
         @self.one.on_stream_end()
