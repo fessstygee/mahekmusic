@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Union
 
 from pyrogram import Client
-from pyrogram.types import InlineKeyboardMarkup, Message
+from pyrogram.types import InlineKeyboardMarkup, Message, InlineKeyboardButton  # ← YEH IMPORT ADD KIYA
 from pytgcalls import PyTgCalls, StreamType
 from pytgcalls.exceptions import (
     AlreadyJoinedError,
@@ -171,14 +171,10 @@ async def send_song_ended(chat_id: int):
         # Delete all existing messages first
         await clean_chat_completely(chat_id)
         
-        # Send song ended message
+        # Send song ended message - WITHOUT buttons to avoid errors
         msg = await app.send_message(
             chat_id=chat_id,
-            text="🎵 **Your Cute Song Ended!**\n\n✨ Please play a new song to continue the vibes!\n\n💝 Use: `/play <song name>`",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎶 Play New Song", switch_inline_query_current_chat="")],
-                [InlineKeyboardButton("📋 Queue", callback_data="queue")]
-            ])
+            text="🎵 **Your Cute Song Ended!**\n\n✨ Please play a new song to continue the vibes!\n\n💝 Use: `/play <song name>`"
         )
         
         # Store song ended message ID
