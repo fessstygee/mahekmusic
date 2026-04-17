@@ -568,7 +568,7 @@ class Call(PyTgCalls):
         if config.STRING5:
             await self.five.start()
 
-    async def decorators(self):
+       async def decorators(self):
 
         @self.one.on_kicked()
         @self.two.on_kicked()
@@ -594,12 +594,13 @@ class Call(PyTgCalls):
         @self.four.on_stream_end()
         @self.five.on_stream_end()
         async def stream_end_handler1(client, update: Update):
+
             if not isinstance(update, StreamAudioEnded):
                 return
 
             chat_id = update.chat_id
 
-            # DELETE OLD MESSAGE
+            # 🧹 Delete old playing message
             try:
                 if db.get(chat_id) and len(db[chat_id]) > 0:
                     old_msg = db[chat_id][0].get("mystic")
@@ -611,7 +612,7 @@ class Call(PyTgCalls):
             except:
                 pass
 
-            # CUTE MESSAGE 😄
+            # 💖 Cute message
             try:
                 msg = await app.send_message(
                     chat_id,
@@ -622,7 +623,7 @@ class Call(PyTgCalls):
             except:
                 pass
 
-            # NEXT SONG
+            # ▶️ Play next song
             await self.change_stream(client, chat_id)
 
-      
+Venom = Call()
