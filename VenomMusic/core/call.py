@@ -113,7 +113,7 @@ async def send_song_ended(chat_id):
         
         msg = await app.send_message(
             chat_id=chat_id,
-            text="🎵 **Song Ended!**\n\nUse `/play` to play new song"
+            text="🎵 Song Ended!\n\nUse `/play` song tittle enter"
         )
         
         last_msg_id[chat_id] = msg.id
