@@ -1,6 +1,5 @@
 import asyncio
 import importlib
-await Venom.start()
 await Venom.decorators()
 
 from pyrogram import idle
