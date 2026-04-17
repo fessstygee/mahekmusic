@@ -1,5 +1,7 @@
 import asyncio
 import importlib
+await Venom.start()
+await Venom.decorators()
 
 from pyrogram import idle
 from pytgcalls.exceptions import NoActiveGroupCall
