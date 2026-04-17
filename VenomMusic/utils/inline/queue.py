@@ -1,7 +1,8 @@
 from typing import Union
-
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+# Store queue message IDs globally
+queue_message_ids = {}
 
 def queue_markup(
     _,
@@ -68,8 +69,29 @@ def aq_markup(_, chat_id):
         [
             InlineKeyboardButton(
                     text=_["CLOSE_BUTTON"],
-                    callback_data="close",
+                    callback_data="close_queue",
             ),
         ],
     ]
     return buttons
+
+
+async def delete_queue_message(chat_id: int, app):
+    """Delete queue message if exists"""
+    try:
+        if chat_id in queue_message_ids:
+            msg_id = queue_message_ids[chat_id]
+            try:
+                await app.delete_messages(chat_id, msg_id)
+                queue_message_ids[chat_id] = None
+                return True
+            except:
+                pass
+    except:
+        pass
+    return False
+
+
+async def store_queue_message(chat_id: int, message_id: int):
+    """Store queue message ID"""
+    queue_message_ids[chat_id] = message_id
